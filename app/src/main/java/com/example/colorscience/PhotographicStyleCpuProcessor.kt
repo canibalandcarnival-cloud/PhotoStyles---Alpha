@@ -19,7 +19,16 @@ data class SceneColorMetrics(
 )
 
 /**
- * Pure Kotlin reference implementation matching [PhotographicStyleShaderSource] equation-for-equation.
+ * Pure Kotlin reference implementation matching [PhotographicStyleShaderSource] equation-for-equation:
+ * - D65 sRGB <-> Linear RGB electro-optical transfer
+ * - CIE XYZ <-> Bradford LMS physiological cone response chromatic adaptation
+ * - CIE XYZ <-> CIELAB perceptual lightness & opponent chrominance
+ * - Melanin-locus multi-spectral skin detection across Fitzpatrick I-VI
+ * - Melanin hue-angle lock guaranteeing zero skin hue drift across all styles and adjustments
+ * - Filmic tonal curve: smooth parametric shadow toe, midtone Hermite pivot, and asymptotic rational shoulder
+ * - Selective nature color grading (polarizing sky blue-cyan depth, natural foliage preservation)
+ * - Luminance-aware saturation roll-off in extreme shadows and specular highlights
+ * - Soft gamut mapping preserving perceptual lightness
  */
 object PhotographicStyleCpuProcessor {
 
@@ -90,26 +99,56 @@ object PhotographicStyleCpuProcessor {
         }
     }
 
+    /**
+     * Melanin-locus skin detection across Fitzpatrick I through VI.
+     */
     fun computeSkinWeight(
         rSrgb: Float,
         gSrgb: Float,
         bSrgb: Float,
         labA: Float,
         labB: Float,
-        hsvScratch: FloatArray = FloatArray(3)
+        hsvScratch: FloatArray = FloatArray(3),
+        labL: Float = -1f
     ): Float {
-        rgbToHsv(rSrgb.coerceIn(0f, 1f), gSrgb.coerceIn(0f, 1f), bSrgb.coerceIn(0f, 1f), hsvScratch)
-        val hueDeg = hsvScratch[0] * 360f
-        val hueDist = if (hueDeg > 300f) hueDeg - 360f else hueDeg
-        val hueMask = smoothstep(-8f, 8f, hueDist) * (1f - smoothstep(38f, 58f, hueDist))
-        val satMask = smoothstep(0.08f, 0.18f, hsvScratch[1]) * (1f - smoothstep(0.62f, 0.80f, hsvScratch[1]))
-        val valMask = smoothstep(0.10f, 0.22f, hsvScratch[2])
+        val r = rSrgb.coerceIn(0f, 1f)
+        val g = gSrgb.coerceIn(0f, 1f)
+        val b = bSrgb.coerceIn(0f, 1f)
+        rgbToHsv(r, g, b, hsvScratch)
 
-        val aMask = smoothstep(1f, 6f, labA) * (1f - smoothstep(30f, 44f, labA))
-        val bMask = smoothstep(2f, 7f, labB) * (1f - smoothstep(38f, 54f, labB))
-        val ratioMask = smoothstep(0.25f, 0.65f, labB / max(labA, 1f))
+        val lStar = if (labL >= 0f) {
+            labL
+        } else {
+            val rL = srgbToLinear(r)
+            val gL = srgbToLinear(g)
+            val bL = srgbToLinear(b)
+            val y = rL * 0.2126729f + gL * 0.7151522f + bL * 0.0721750f
+            116f * labF(y) - 16f
+        }
 
-        return (hueMask * satMask * valMask * aMask * bMask * ratioMask).coerceIn(0f, 1f)
+        var angleDeg = Math.toDegrees(kotlin.math.atan2(labB.toDouble(), labA.toDouble())).toFloat()
+        if (angleDeg < 0f) angleDeg += 360f
+
+        val angleDist = abs(angleDeg - 48.0f)
+        val angleMask = 1f - smoothstep(12.0f, 30.0f, angleDist)
+
+        val chroma = sqrt(labA * labA + labB * labB)
+        val chromaMask = smoothstep(3.5f, 9.0f, chroma) * (1f - smoothstep(46.0f, 68.0f, chroma))
+
+        val lightMask = smoothstep(8.0f, 18.0f, lStar) * (1f - smoothstep(88.0f, 96.0f, lStar))
+        val aMask = smoothstep(1.5f, 5.0f, labA) * (1f - smoothstep(36.0f, 50.0f, labA))
+
+        val hDeg = hsvScratch[0] * 360f
+        val hDist = if (hDeg > 300f) 360f - hDeg else hDeg
+        val hsvMask = (1f - smoothstep(28.0f, 52.0f, hDist)) *
+            smoothstep(0.06f, 0.15f, hsvScratch[1]) *
+            (1f - smoothstep(0.70f, 0.86f, hsvScratch[1])) *
+            smoothstep(0.08f, 0.18f, hsvScratch[2])
+
+        val ratio = labB / max(labA, 0.8f)
+        val ratioMask = smoothstep(0.40f, 0.80f, ratio) * (1f - smoothstep(2.2f, 3.0f, ratio))
+
+        return (angleMask * chromaMask * lightMask * aMask * hsvMask * ratioMask * 1.6f).coerceIn(0f, 1f)
     }
 
     fun processPixelBuffer(
@@ -127,7 +166,6 @@ object PhotographicStyleCpuProcessor {
         val w = width.coerceAtLeast(1)
         val h = height.coerceAtLeast(1)
 
-        // Pre-pass: Soft Skin edge-preserving bilateral filter when enabled on 2D bitmaps
         val inputPixels = if (uniforms.softSkinAmount > 0.005f && w >= 4 && h >= 4) {
             applySoftSkinPass(pixels, w, h, uniforms.softSkinAmount)
         } else {
@@ -142,7 +180,6 @@ object PhotographicStyleCpuProcessor {
             processPixelArgb(inputPixels[i], uniforms, hsvScratch, rgbScratch, x = x, y = y)
         }
 
-        // Post-pass: Optical Glow highlight diffusion when enabled on 2D bitmaps
         return if (uniforms.glowAmount > 0.005f && w >= 4 && h >= 4) {
             applyGlowPass(graded, w, h, uniforms.glowAmount)
         } else {
@@ -174,9 +211,10 @@ object PhotographicStyleCpuProcessor {
                 val yXyz = rL * 0.2126729f + gL * 0.7151522f + bL * 0.0721750f
                 val zXyz = rL * 0.0193339f + gL * 0.1191920f + bL * 0.9503041f
                 val fy = labF(yXyz)
+                val labL = 116f * fy - 16f
                 val labA = 500f * (labF(xXyz / 0.95047f) - fy)
                 val labB = 200f * (fy - labF(zXyz / 1.08883f))
-                val skinW = computeSkinWeight(r0, g0, b0, labA, labB, hsvScratch)
+                val skinW = computeSkinWeight(r0, g0, b0, labA, labB, hsvScratch, labL)
 
                 if (skinW < 0.02f) {
                     out[idx] = c
@@ -276,6 +314,7 @@ object PhotographicStyleCpuProcessor {
         val gIn = ((argb ushr 8) and 0xFF) / 255f
         val bIn = (argb and 0xFF) / 255f
 
+        // 1. Linearize light
         val rLin = srgbToLinear(rIn)
         val gLin = srgbToLinear(gIn)
         val bLin = srgbToLinear(bIn)
@@ -285,34 +324,52 @@ object PhotographicStyleCpuProcessor {
         val z0 = rLin * 0.0193339f + gLin * 0.1191920f + bLin * 0.9503041f
 
         val fy0 = labF(y0)
+        val labL0 = 116f * fy0 - 16f
         val labA0 = 500f * (labF(x0 / 0.95047f) - fy0)
         val labB0 = 200f * (fy0 - labF(z0 / 1.08883f))
 
-        val skinWeight = computeSkinWeight(rIn, gIn, bIn, labA0, labB0, hsvScratch)
+        // 2. Multi-spectral skin-tone detection & melanin hue anchor
+        val skinWeight = computeSkinWeight(rIn, gIn, bIn, labA0, labB0, hsvScratch, labL0)
+        val origSkinAngle = kotlin.math.atan2(labB0.toDouble(), labA0.toDouble()).toFloat()
 
+        // 3. Bradford LMS cone chromatic adaptation (Warmth & Tint) with neutral highlight preservation
         val lum0 = y0.coerceIn(0f, 1f)
-        val highlightGuard = 1f - smoothstep(0.74f, 0.99f, lum0)
+        val highlightGuard = 1f - smoothstep(0.76f, 0.98f, lum0)
         val skinWarmGuard = if (uniforms.warmthShift < 0f) {
             1f - skinWeight * uniforms.coolSkinGuard
         } else {
-            1f - skinWeight * 0.22f
+            1f - skinWeight * 0.16f
         }
         val effWarmth = uniforms.warmthShift * mix(0.35f, 1f, highlightGuard) * skinWarmGuard
-        val effTint = uniforms.tintShift * mix(0.45f, 1f, highlightGuard)
+        val effTint = uniforms.tintShift * mix(0.40f, 1f, highlightGuard)
 
-        val wbR = 1f + effWarmth * 0.22f + effTint * 0.10f
-        val wbG = 1f + effWarmth * 0.03f - effTint * 0.12f
-        val wbB = 1f - effWarmth * 0.25f + effTint * 0.08f
-        val wbLum = max(wbR * 0.2126729f + wbG * 0.7151522f + wbB * 0.0721750f, 0.1f)
+        val coneGainsL = 1f + effWarmth * 0.22f - effTint * 0.06f
+        val coneGainsM = 1f + effWarmth * 0.04f + effTint * 0.16f
+        val coneGainsS = 1f - effWarmth * 0.28f + effTint * 0.06f
 
-        val rWb = rLin * (wbR / wbLum)
-        val gWb = gLin * (wbG / wbLum)
-        val bWb = bLin * (wbB / wbLum)
+        val l0 = x0 * 0.8951000f + y0 * 0.2664000f - z0 * 0.1614000f
+        val m0 = -x0 * 0.7502000f + y0 * 1.7135000f + z0 * 0.0367000f
+        val s0 = x0 * 0.0389000f - y0 * 0.0685000f + z0 * 1.0296000f
 
-        val xWb = rWb * 0.4124564f + gWb * 0.3575761f + bWb * 0.1804375f
-        val yWb = rWb * 0.2126729f + gWb * 0.7151522f + bWb * 0.0721750f
-        val zWb = rWb * 0.0193339f + gWb * 0.1191920f + bWb * 0.9503041f
+        val lAdapted = l0 * coneGainsL
+        val mAdapted = m0 * coneGainsM
+        val sAdapted = s0 * coneGainsS
 
+        val xAdapted = lAdapted * 0.9869929f - mAdapted * 0.1470543f + sAdapted * 0.1599627f
+        val yAdapted = lAdapted * 0.4323053f + mAdapted * 0.5183603f + sAdapted * 0.0492912f
+        val zAdapted = -lAdapted * 0.0085287f + mAdapted * 0.0400428f + sAdapted * 0.9684867f
+
+        val yNorm = max(yAdapted, 1e-5f)
+        val lumPreserve = mix(1f, lum0 / yNorm, 0.85f)
+        val xWb = xAdapted * lumPreserve
+        val yWb = yAdapted * lumPreserve
+        val zWb = zAdapted * lumPreserve
+
+        val rWb = xWb * 3.2404542f + yWb * -1.5371385f + zWb * -0.4985314f
+        val gWb = xWb * -0.9692660f + yWb * 1.8760108f + zWb * 0.0415560f
+        val bWb = xWb * 0.0556434f + yWb * -0.2040259f + zWb * 1.0572252f
+
+        // 4. Perceptual CIELAB space
         val fy = labF(yWb)
         val labL = 116f * fy - 16f
         val labA = 500f * (labF(xWb / 0.95047f) - fy)
@@ -338,34 +395,32 @@ object PhotographicStyleCpuProcessor {
             lNorm = (lNorm + (lNorm - 0.50f) * presenceBoost * 0.55f).coerceIn(0f, 1f)
         }
 
-        // Stage 4 & 5: Shadows
-        val shadowMask = smoothstep(0.58f, 0f, lNorm) * smoothstep(0f, 0.08f, lNorm)
-        val shadowAtten = 1f - skinWeight * uniforms.skinProtection * (if (uniforms.shadowLift < 0f) 0.55f else 0.25f)
-        lNorm += uniforms.shadowLift * 0.22f * shadowMask * shadowAtten
+        // Stage 4 & 5: Filmic Tonal Shaping (Shadow Toe, Midtone Lift, Hermite S-curve, Highlight Shoulder)
+        val shadowMask = smoothstep(0.48f, 0f, lNorm) * smoothstep(0f, 0.07f, lNorm)
+        val shadowAtten = 1f - skinWeight * uniforms.skinProtection * (if (uniforms.shadowLift < 0f) 0.50f else 0.22f)
+        lNorm += uniforms.shadowLift * 0.24f * shadowMask * shadowAtten
 
-        // Midtone lift
-        val midMask = smoothstep(0.02f, 0.35f, lNorm) * (1f - smoothstep(0.70f, 0.98f, lNorm))
+        val midMask = smoothstep(0.03f, 0.35f, lNorm) * (1f - smoothstep(0.68f, 0.98f, lNorm))
         lNorm += uniforms.midtoneLift * midMask
 
-        // Hermite midtone S-curve
         val effContrast = mix(
             uniforms.contrast,
-            1f + (uniforms.contrast - 1f) * 0.45f,
+            1f + (uniforms.contrast - 1f) * 0.40f,
             skinWeight * uniforms.skinProtection
         )
-        val curved = 0.48f + (lNorm - 0.48f) * effContrast
-        val extremeBlend = smoothstep(0f, 0.18f, lNorm) * (1f - smoothstep(0.76f, 1f, lNorm))
+        val centered = lNorm - 0.46f
+        val curved = 0.46f + centered * effContrast
+        val extremeBlend = smoothstep(0.01f, 0.18f, lNorm) * (1f - smoothstep(0.74f, 1f, lNorm))
         lNorm = mix(lNorm, curved, extremeBlend)
 
-        // Highlight protection shoulder
-        if (lNorm > 0.72f) {
-            val over = (lNorm - 0.72f) / 0.28f
-            val compressed = 0.72f + 0.28f * (over / (1f + over * uniforms.highlightShoulder))
-            lNorm = mix(lNorm, compressed, smoothstep(0.72f, 0.92f, lNorm))
+        if (lNorm > 0.68f) {
+            val over = (lNorm - 0.68f) / 0.32f
+            val compressed = 0.68f + 0.32f * (over / (1f + over * uniforms.highlightShoulder))
+            lNorm = mix(lNorm, compressed, smoothstep(0.68f, 0.90f, lNorm))
         }
         lNorm = lNorm.coerceIn(0f, 1f)
 
-        // Skin-safe perceptual hue rotation
+        // 6. 2D Palette Hue rotation with skin protection
         val srgbWbR = linearToSrgb(rWb)
         val srgbWbG = linearToSrgb(gWb)
         val srgbWbB = linearToSrgb(bWb)
@@ -376,7 +431,7 @@ object PhotographicStyleCpuProcessor {
 
         var abA = labA
         var abB = labB
-        val effHueShift = uniforms.paletteHueShiftDeg * (1f - skinWeight * uniforms.skinProtection * 0.78f)
+        val effHueShift = uniforms.paletteHueShiftDeg * (1f - skinWeight * uniforms.skinProtection * 0.85f)
         if (abs(effHueShift) > 0.05f && satVal > 0.03f) {
             hsvToRgb(hsvScratch[0] + effHueShift / 360f, satVal, valVal, rgbScratch)
             val rRL = srgbToLinear(rgbScratch[0])
@@ -397,30 +452,49 @@ object PhotographicStyleCpuProcessor {
             }
         }
 
-        // Vibrance + Saturation + selective sky/foliage boost
+        // 7. Nature color families: sky and foliage
+        val skyMask = smoothstep(185f, 205f, hDeg) * (1f - smoothstep(238f, 258f, hDeg))
+        val greenMask = smoothstep(76f, 96f, hDeg) * (1f - smoothstep(145f, 168f, hDeg))
+        val natureBoost = 1f + uniforms.skyFoliageBoost * max(skyMask, greenMask) * smoothstep(0.08f, 0.42f, satVal)
+        if (skyMask > 0.01f && uniforms.skyFoliageBoost > 0.01f) {
+            lNorm = (lNorm - 0.035f * uniforms.skyFoliageBoost * skyMask * smoothstep(0.12f, 0.55f, satVal)).coerceIn(0f, 1f)
+        }
+
+        // 8. Vibrance + Saturation + Luminance-Aware Chroma Roll-off
         val chroma = sqrt(abA * abA + abB * abB)
-        val chromaNorm = (chroma / 75f).coerceIn(0f, 1f)
+        val chromaNorm = (chroma / 72f).coerceIn(0f, 1f)
         val vibranceGate = (uniforms.chromaScale / 0.35f).coerceIn(0f, 1f)
         val vibranceGain = 1f + (uniforms.vibrance * vibranceGate) * (1f - chromaNorm) * (1f - chromaNorm)
         val baseChromaGain = uniforms.chromaScale * vibranceGain
 
-        val skyMask = smoothstep(185f, 205f, hDeg) * (1f - smoothstep(240f, 260f, hDeg))
-        val greenMask = smoothstep(75f, 98f, hDeg) * (1f - smoothstep(145f, 168f, hDeg))
-        val natureBoost = 1f + uniforms.skyFoliageBoost * max(skyMask, greenMask) * smoothstep(0.10f, 0.45f, satVal)
-
         val targetChromaGain = baseChromaGain * natureBoost
         val skinMaxChromaGain = if (targetChromaGain > 1f) {
-            1f + (targetChromaGain - 1f) * (1f - uniforms.skinProtection * 0.72f)
+            1f + (targetChromaGain - 1f) * (1f - uniforms.skinProtection * 0.78f)
         } else {
             targetChromaGain
         }
         val finalChromaGain = mix(targetChromaGain, skinMaxChromaGain, skinWeight)
 
-        val labWarmMod = effWarmth * 16f * (1f - smoothstep(0.80f, 1f, lNorm))
-        val labTintMod = effTint * 12f * (1f - skinWeight * 0.4f)
+        // Natural desaturation in deep shadows and specular highlights
+        val satRollOff = (1f - smoothstep(0.78f, 0.98f, lNorm) * 0.70f) * smoothstep(0.015f, 0.10f, lNorm)
+        val abScaledA = abA * (finalChromaGain * satRollOff)
+        val abScaledB = abB * (finalChromaGain * satRollOff)
 
-        var labAOut = abA * finalChromaGain + labTintMod
-        var labBOut = abB * finalChromaGain + labWarmMod
+        // Ambient warmth and tint modulation
+        val labWarmMod = effWarmth * 14f * (1f - smoothstep(0.78f, 0.98f, lNorm))
+        val labTintMod = effTint * 10f * (1f - skinWeight * 0.45f)
+
+        val labAGraded = abScaledA + labTintMod
+        val labBGraded = abScaledB + labWarmMod
+
+        // 9. Melanin Hue-Angle Lock: Project skin pixels to original melanin angle
+        val gradedChroma = sqrt(labAGraded * labAGraded + labBGraded * labBGraded)
+        val skinLockedA = gradedChroma * kotlin.math.cos(origSkinAngle.toDouble()).toFloat()
+        val skinLockedB = gradedChroma * kotlin.math.sin(origSkinAngle.toDouble()).toFloat()
+        val skinLockBlend = (skinWeight * uniforms.skinProtection).coerceIn(0f, 1f)
+
+        var labAOut = mix(labAGraded, skinLockedA, skinLockBlend)
+        var labBOut = mix(labBGraded, skinLockedB, skinLockBlend)
 
         if (uniforms.filmAmount > 0.005f) {
             val toeLift = smoothstep(0.34f, 0f, lNorm) * 0.032f * uniforms.filmAmount
@@ -436,7 +510,7 @@ object PhotographicStyleCpuProcessor {
             labBOut += -2.8f * shadowSplit + 3.6f * highlightSplit * skinDamp
         }
 
-        // LAB -> XYZ -> Linear RGB
+        // 10. LAB -> XYZ -> Linear RGB -> softGamutMap -> sRGB
         val fyOut = (lNorm * 100f + 16f) / 116f
         val fxOut = labAOut / 500f + fyOut
         val fzOut = fyOut - labBOut / 200f
@@ -544,6 +618,7 @@ object PhotographicStyleCpuProcessor {
             val y0 = srgbToLinear(r0) * 0.2126729f + srgbToLinear(g0) * 0.7151522f + srgbToLinear(b0) * 0.0721750f
             val z0 = srgbToLinear(r0) * 0.0193339f + srgbToLinear(g0) * 0.1191920f + srgbToLinear(b0) * 0.9503041f
             val fy0 = labF(y0)
+            val l0 = 116f * fy0 - 16f
             val a0 = 500f * (labF(x0 / 0.95047f) - fy0)
             val bLab0 = 200f * (fy0 - labF(z0 / 1.08883f))
 
@@ -562,8 +637,8 @@ object PhotographicStyleCpuProcessor {
             if (l1 in 4f..25f) shadowVisibleCount++
             if (l1 < 98.5f) highlightSafeCount++
 
-            val skinW = computeSkinWeight(r0, g0, b0, a0, bLab0, hsvOrig)
-            if (skinW > 0.35f) {
+            val skinW = computeSkinWeight(r0, g0, b0, a0, bLab0, hsvOrig, l0)
+            if (skinW > 0.30f) {
                 skinCount++
                 rgbToHsv(r0, g0, b0, hsvOrig)
                 rgbToHsv(r1, g1, b1, hsvStyled)

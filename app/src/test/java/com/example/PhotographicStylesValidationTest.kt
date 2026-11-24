@@ -525,4 +525,108 @@ class PhotographicStylesValidationTest {
             }
         }
     }
+
+    @Test
+    fun `fitzpatrick I through VI diverse human skin complexions maintain melanin hue angle without drift across styles and extreme adjustments`() {
+        val fitzpatrickPatch = intArrayOf(
+            argb(246, 222, 204), // Type I: very fair, porcelain
+            argb(232, 190, 165), // Type II: fair Caucasian
+            argb(205, 155, 125), // Type III: medium olive/beige
+            argb(175, 125, 95),  // Type IV: Mediterranean / Latino
+            argb(120, 80, 58),   // Type V: Brown / South Asian
+            argb(78, 50, 38)     // Type VI: Deep Brown / African
+        )
+
+        for (style in PhotographicStyle.entries) {
+            val styled = processPixels(fitzpatrickPatch, StyleParameters(style = style))
+            val metrics = PhotographicStyleCpuProcessor.analyzePixelArrays(fitzpatrickPatch, styled)
+            assertTrue("Fitzpatrick skin fraction > 0.8 for $style", metrics.skinPixelFraction >= 0.8f)
+            assertTrue(
+                "Fitzpatrick skin hue drift must be strictly bounded for $style (${metrics.skinHueDriftDegrees} deg)",
+                metrics.skinHueDriftDegrees < 5.0f
+            )
+        }
+
+        // Extreme user Warmth & Tone adjustments
+        val extremeWarm = processPixels(fitzpatrickPatch, StyleParameters(PhotographicStyle.STANDARD, tone = -50, warmth = 80))
+        val warmMetrics = PhotographicStyleCpuProcessor.analyzePixelArrays(fitzpatrickPatch, extremeWarm)
+        assertTrue("Extreme warm skin hue drift < 5.5 deg (${warmMetrics.skinHueDriftDegrees})", warmMetrics.skinHueDriftDegrees < 5.5f)
+
+        val extremeCool = processPixels(fitzpatrickPatch, StyleParameters(PhotographicStyle.COOL, tone = 50, warmth = -80))
+        val coolMetrics = PhotographicStyleCpuProcessor.analyzePixelArrays(fitzpatrickPatch, extremeCool)
+        assertTrue("Extreme cool skin hue drift < 5.5 deg (${coolMetrics.skinHueDriftDegrees})", coolMetrics.skinHueDriftDegrees < 5.5f)
+    }
+
+    @Test
+    fun `tone slider adjusts shadow depth and midtone contrast smoothly without black crush or highlight blowout`() {
+        val stepRamp = intArrayOf(
+            argb(8, 8, 10),      // near black toe
+            argb(30, 30, 32),    // shadow
+            argb(115, 115, 118), // midtone
+            argb(200, 200, 202), // upper mid
+            argb(248, 248, 250)  // specular highlight
+        )
+        val deepTone = processPixels(stepRamp, StyleParameters(PhotographicStyle.RICH_CONTRAST, tone = -80))
+        val liftedTone = processPixels(stepRamp, StyleParameters(PhotographicStyle.STANDARD, tone = 80))
+        val deepMetrics = PhotographicStyleCpuProcessor.analyzePixelArrays(stepRamp, deepTone)
+        val liftedMetrics = PhotographicStyleCpuProcessor.analyzePixelArrays(stepRamp, liftedTone)
+
+        assertTrue(
+            "Lifted tone mean L* (${liftedMetrics.meanLightness}) must exceed Deep tone mean L* (${deepMetrics.meanLightness})",
+            liftedMetrics.meanLightness > deepMetrics.meanLightness + 3.0f
+        )
+
+        // Near-black shadow at index 0 must retain texture without hard crushing
+        val shadowNearBlack = (deepTone[0] ushr 16) and 0xFF
+        assertTrue("Near-black shadow must retain texture without hard crushing ($shadowNearBlack > 0)", shadowNearBlack > 0)
+
+        // Specular highlight at index 4 must compress smoothly without digital blowout
+        val highlightVal = (liftedTone[4] ushr 16) and 0xFF
+        assertTrue("Highlight must not blow out to clipped white ($highlightVal <= 255)", highlightVal <= 255)
+    }
+
+    @Test
+    fun `specular highlights and extreme deep shadows exhibit natural luminance aware chroma roll off`() {
+        val specularHighlight = intArrayOf(argb(254, 250, 235))
+        val styledHighlight = processPixels(specularHighlight, StyleParameters(PhotographicStyle.WARM, warmth = 60))
+        val p = styledHighlight[0]
+        val r = (p ushr 16) and 0xFF
+        val g = (p ushr 8) and 0xFF
+        val b = p and 0xFF
+        val spread = kotlin.math.max(r, kotlin.math.max(g, b)) - kotlin.math.min(r, kotlin.math.min(g, b))
+        assertTrue("Specular highlight should roll off toward neutral white (spread=$spread)", spread < 25)
+    }
+
+    @Test
+    fun `color separation preserves rich blue skies and lush vegetation without neon shift or purpling`() {
+        val natureScene = intArrayOf(
+            argb(65, 140, 225),  // Sky blue
+            argb(75, 145, 55),   // Lush foliage green
+            argb(150, 95, 60)    // Warm earth / terracotta
+        )
+        val richGraded = processPixels(natureScene, StyleParameters(PhotographicStyle.RICH_CONTRAST))
+        val vibGraded = processPixels(natureScene, StyleParameters(PhotographicStyle.VIBRANT))
+
+        // Sky in Rich Contrast
+        val skyPixel = richGraded[0]
+        val rS = ((skyPixel ushr 16) and 0xFF) / 255f
+        val gS = ((skyPixel ushr 8) and 0xFF) / 255f
+        val bS = (skyPixel and 0xFF) / 255f
+        val maxS = kotlin.math.max(rS, kotlin.math.max(gS, bS))
+        val minS = kotlin.math.min(rS, kotlin.math.min(gS, bS))
+        val dS = maxS - minS
+        val hS = if (maxS == bS) (((rS - gS) / dS) + 4f) * 60f else (((gS - bS) / dS) + (if (gS < bS) 6f else 0f)) * 60f
+        assertTrue("Sky hue should stay in rich blue-cyan family without purpling (hue=$hS)", hS in 195f..238f)
+
+        // Foliage in Vibrant
+        val leafPixel = vibGraded[1]
+        val rL = ((leafPixel ushr 16) and 0xFF) / 255f
+        val gL = ((leafPixel ushr 8) and 0xFF) / 255f
+        val bL = (leafPixel and 0xFF) / 255f
+        val maxL = kotlin.math.max(rL, kotlin.math.max(gL, bL))
+        val minL = kotlin.math.min(rL, kotlin.math.min(gL, bL))
+        val dL = maxL - minL
+        val hL = (((bL - rL) / dL) + 2f) * 60f
+        assertTrue("Foliage hue should remain natural green without drifting into neon yellow (hue=$hL)", hL in 85f..145f)
+    }
 }

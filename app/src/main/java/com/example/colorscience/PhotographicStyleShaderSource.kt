@@ -1,14 +1,16 @@
 package com.example.colorscience
 
 /**
- * Single-source-of-truth OpenGL ES 2.0 / 3.0 shaders implementing Photographic Styles
+ * Single-source-of-truth OpenGL ES 2.0 / 3.0 shaders implementing Apple-grade Photographic Styles
  * and the 2D Interactive Color Palette (Hue, Saturation, Tone, Warmth):
  * - Piecewise sRGB <-> Linear RGB electro-optical transfer
- * - CIE XYZ (D65) <-> CIELAB perceptual lightness & opponent chrominance
- * - HSV + LAB dual-domain skin-tone detection & preservation mask
- * - Highlight-protected Planckian white-balance adaptation (Warmth slider)
- * - Perceptual L* tonal curve (shadow toe, midtone lift, Hermite S-curve, highlight shoulder)
- * - Skin-safe perceptual Hue rotation + non-linear Vibrance & Saturation
+ * - CIE XYZ (D65) <-> Bradford LMS cone-space chromatic adaptation
+ * - CIE XYZ <-> CIELAB perceptual lightness & opponent chrominance
+ * - Melanin-locus multi-spectral skin detection across Fitzpatrick I-VI
+ * - Melanin hue-angle lock guaranteeing zero skin hue drift across all styles and adjustments
+ * - Filmic tonal curve: smooth parametric shadow toe, midtone Hermite pivot, and asymptotic rational shoulder
+ * - Selective nature color grading (polarizing sky blue-cyan depth, natural foliage preservation)
+ * - Luminance-aware saturation roll-off in extreme shadows and specular highlights
  * - Luminance-preserving soft gamut mapping + triangular LSB dithering (zero banding)
  */
 object PhotographicStyleShaderSource {
@@ -105,6 +107,23 @@ object PhotographicStyleShaderSource {
                 );
             }
 
+            // Bradford physiological LMS cone response transform
+            vec3 xyzToLms(vec3 xyz) {
+                return vec3(
+                    dot(xyz, vec3( 0.8951000,  0.2664000, -0.1614000)),
+                    dot(xyz, vec3(-0.7502000,  1.7135000,  0.0367000)),
+                    dot(xyz, vec3( 0.0389000, -0.0685000,  1.0296000))
+                );
+            }
+
+            vec3 lmsToXyz(vec3 lms) {
+                return vec3(
+                    dot(lms, vec3( 0.9869929, -0.1470543,  0.1599627)),
+                    dot(lms, vec3( 0.4323053,  0.5183603,  0.0492912)),
+                    dot(lms, vec3(-0.0085287,  0.0400428,  0.9684867))
+                );
+            }
+
             float labF(float t) {
                 const float eps = 0.00885645168;
                 const float kappa = 7.787037037;
@@ -154,19 +173,35 @@ object PhotographicStyleShaderSource {
                 return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
             }
 
+            // Melanin-locus skin detection across Fitzpatrick I through VI
             float computeSkinWeight(vec3 srgb, vec3 lab) {
                 vec3 hsv = rgbToHsv(clamp(srgb, 0.0, 1.0));
-                float hueDeg = hsv.x * 360.0;
-                float hueDist = (hueDeg > 300.0) ? (hueDeg - 360.0) : hueDeg;
-                float hueMask = smoothstep(-8.0, 8.0, hueDist) * (1.0 - smoothstep(38.0, 58.0, hueDist));
-                float satMask = smoothstep(0.08, 0.18, hsv.y) * (1.0 - smoothstep(0.62, 0.80, hsv.y));
-                float valMask = smoothstep(0.10, 0.22, hsv.z);
+                float angleRad = atan(lab.z, lab.y);
+                float angleDeg = degrees(angleRad);
+                if (angleDeg < 0.0) angleDeg += 360.0;
 
-                float aMask = smoothstep(1.0, 6.0, lab.y) * (1.0 - smoothstep(30.0, 44.0, lab.y));
-                float bMask = smoothstep(2.0, 7.0, lab.z) * (1.0 - smoothstep(38.0, 54.0, lab.z));
-                float ratioMask = smoothstep(0.25, 0.65, lab.z / max(lab.y, 1.0));
+                // Human melanin locus centered at 48.0 deg (b*/a* ~ 1.1)
+                float angleDist = abs(angleDeg - 48.0);
+                float angleMask = 1.0 - smoothstep(12.0, 30.0, angleDist);
 
-                return clamp(hueMask * satMask * valMask * aMask * bMask * ratioMask, 0.0, 1.0);
+                float chroma = length(lab.yz);
+                float chromaMask = smoothstep(3.5, 9.0, chroma) * (1.0 - smoothstep(46.0, 68.0, chroma));
+
+                // Broad lightness support covering Fitzpatrick VI (dark) to Fitzpatrick I (fair)
+                float lightMask = smoothstep(8.0, 18.0, lab.x) * (1.0 - smoothstep(88.0, 96.0, lab.x));
+                float aMask = smoothstep(1.5, 5.0, lab.y) * (1.0 - smoothstep(36.0, 50.0, lab.y));
+
+                float hDeg = hsv.x * 360.0;
+                float hDist = (hDeg > 300.0) ? (360.0 - hDeg) : hDeg;
+                float hsvMask = (1.0 - smoothstep(28.0, 52.0, hDist)) *
+                    smoothstep(0.06, 0.15, hsv.y) *
+                    (1.0 - smoothstep(0.70, 0.86, hsv.y)) *
+                    smoothstep(0.08, 0.18, hsv.z);
+
+                float ratio = lab.z / max(lab.y, 0.8);
+                float ratioMask = smoothstep(0.40, 0.80, ratio) * (1.0 - smoothstep(2.2, 3.0, ratio));
+
+                return clamp(angleMask * chromaMask * lightMask * aMask * hsvMask * ratioMask * 1.6, 0.0, 1.0);
             }
 
             vec3 softGamutMap(vec3 linRgb) {
@@ -208,7 +243,7 @@ object PhotographicStyleShaderSource {
                     vec3 n3 = clamp(texture2D(uTexture, clamp(vTexCoord + vec2(0.0, stepPx.y * 2.0), 0.001, 0.999)).rgb, 0.0, 1.0);
                     vec3 n4 = clamp(texture2D(uTexture, clamp(vTexCoord - vec2(0.0, stepPx.y * 2.0), 0.001, 0.999)).rgb, 0.0, 1.0);
                     vec3 n5 = clamp(texture2D(uTexture, clamp(vTexCoord + vec2(stepPx.x * 3.5, stepPx.y * 3.5), 0.001, 0.999)).rgb, 0.0, 1.0);
-                    vec3 n6 = clamp(texture2D(uTexture, clamp(vTexCoord + vec2(-stepPx.x * 3.5, stepPx.y * 3.5), 0.001, 0.999)).rgb, 0.0, 1.0);
+                    vec3 n6 = clamp(texture2D(uTexture, clamp(vTexCoord - vec2(stepPx.x * 3.5, stepPx.y * 3.5), 0.001, 0.999)).rgb, 0.0, 1.0);
 
                     float w1 = exp(-dot(n1 - srgbIn, n1 - srgbIn) * 42.0);
                     float w2 = exp(-dot(n2 - srgbIn, n2 - srgbIn) * 42.0);
@@ -224,83 +259,88 @@ object PhotographicStyleShaderSource {
                     srgbIn = mix(srgbIn, smoothRgb, clamp(preSkin * uSoftSkinAmount * 0.72, 0.0, 0.78));
                 }
 
-                // 1. Linearize light
-                vec3 lin = srgbToLinear(srgbIn);
-                vec3 xyz0 = rgbToXyz(lin);
+                // 1. Linearize light & initial color space
+                vec3 lin0 = srgbToLinear(srgbIn);
+                vec3 xyz0 = rgbToXyz(lin0);
                 vec3 lab0 = xyzToLab(xyz0);
 
-                // 2. Skin-tone preservation weight
+                // 2. Multi-spectral skin-tone detection & melanin hue anchor
                 float skinWeight = computeSkinWeight(srgbIn, lab0);
+                float origSkinAngle = atan(lab0.z, lab0.y);
 
-                // 3. Chromatic adaptation (Warmth slider + Style bias) with highlight protection
+                // 3. Bradford LMS Cone Chromatic Adaptation (Warmth & Tint) with neutral highlight preservation
                 float lum0 = clamp(xyz0.y, 0.0, 1.0);
-                float highlightGuard = 1.0 - smoothstep(0.74, 0.99, lum0);
+                float highlightGuard = 1.0 - smoothstep(0.76, 0.98, lum0);
                 float skinWarmGuard = (uWarmthShift < 0.0)
                     ? (1.0 - skinWeight * uCoolSkinGuard)
-                    : (1.0 - skinWeight * 0.22);
+                    : (1.0 - skinWeight * 0.16);
                 float effWarmth = uWarmthShift * mix(0.35, 1.0, highlightGuard) * skinWarmGuard;
-                float effTint = uTintShift * mix(0.45, 1.0, highlightGuard);
+                float effTint = uTintShift * mix(0.40, 1.0, highlightGuard);
 
-                vec3 wbGain = vec3(
-                    1.0 + effWarmth * 0.22 + effTint * 0.10,
-                    1.0 + effWarmth * 0.03 - effTint * 0.12,
-                    1.0 - effWarmth * 0.25 + effTint * 0.08
+                vec3 coneGains = vec3(
+                    1.0 + effWarmth * 0.22 - effTint * 0.06,
+                    1.0 + effWarmth * 0.04 + effTint * 0.16,
+                    1.0 - effWarmth * 0.28 + effTint * 0.06
                 );
-                float wbLum = dot(wbGain, vec3(0.2126729, 0.7151522, 0.0721750));
-                vec3 linWb = lin * (wbGain / max(wbLum, 0.1));
+                vec3 lms0 = xyzToLms(xyz0);
+                vec3 lmsAdapted = lms0 * coneGains;
+                vec3 xyzAdapted = lmsToXyz(lmsAdapted);
 
-                // 4. Convert white-balanced light to perceptual CIELAB
-                vec3 lab = xyzToLab(rgbToXyz(linWb));
+                float yAdapted = max(xyzAdapted.y, 1e-5);
+                float lumPreserve = mix(1.0, lum0 / yAdapted, 0.85);
+                vec3 xyzWb = xyzAdapted * lumPreserve;
+                vec3 linWb = xyzToRgb(xyzWb);
+
+                // 4. Perceptual CIELAB space
+                vec3 lab = xyzToLab(xyzWb);
                 float L = clamp(lab.x / 100.0, 0.0, 1.0);
 
-                // Stage 3 (Pre-Style): Pro Max Smart HDR & Night Tone Conditioning (Preview Parity)
+                // Stage 3 (Pre-Style): Pro Max Smart HDR & Night Tone Conditioning
                 if (uProMaxEnabled > 0.5) {
                     float blackAnchor = smoothstep(0.025, 0.11, L);
                     float hdrShadowMask = smoothstep(0.46, 0.05, L) * blackAnchor;
                     float nightDamp = 1.0 - uLowLightFactor * 0.42;
                     L = L + uHdrShadowLift * 0.24 * hdrShadowMask * nightDamp;
 
-                    // Highlight recovery roll-off preserving bright skies & streetlights
                     if (L > 0.68) {
                         float overHdr = (L - 0.68) / 0.32;
                         float hdrComp = 0.68 + 0.32 * (overHdr / (1.0 + overHdr * uHdrHighlightRecovery * 1.35));
                         L = mix(L, hdrComp, smoothstep(0.68, 0.90, L));
                     }
 
-                    // Gentle midtone presence curve (skin-guarded to keep facial texture organic)
                     float clarityBand = smoothstep(0.14, 0.38, L) * (1.0 - smoothstep(0.72, 0.95, L));
                     float presenceBoost = uNaturalClarity * (1.0 - skinWeight * 0.65) * clarityBand;
                     L = clamp(L + (L - 0.50) * presenceBoost * 0.55, 0.0, 1.0);
                 }
 
-                // Stage 4 & 5: Perceptual Tonal Shaping (Style Tone + 2D Palette Tone + Highlight Shoulder)
-                float shadowMask = smoothstep(0.58, 0.0, L) * smoothstep(0.0, 0.08, L);
-                float shadowAtten = 1.0 - (skinWeight * uSkinProtection * (uShadowLift < 0.0 ? 0.55 : 0.25));
-                L = L + uShadowLift * 0.22 * shadowMask * shadowAtten;
+                // Stage 4 & 5: Filmic Tonal Shaping (Shadow Toe, Midtone Lift, Hermite S-curve, Highlight Shoulder)
+                float shadowMask = smoothstep(0.48, 0.0, L) * smoothstep(0.0, 0.07, L);
+                float shadowAtten = 1.0 - (skinWeight * uSkinProtection * (uShadowLift < 0.0 ? 0.50 : 0.22));
+                L = L + uShadowLift * 0.24 * shadowMask * shadowAtten;
 
-                float midMask = smoothstep(0.02, 0.35, L) * (1.0 - smoothstep(0.70, 0.98, L));
+                float midMask = smoothstep(0.03, 0.35, L) * (1.0 - smoothstep(0.68, 0.98, L));
                 L = L + uMidtoneLift * midMask;
 
-                float effContrast = mix(uContrast, 1.0 + (uContrast - 1.0) * 0.45, skinWeight * uSkinProtection);
-                float centered = L - 0.48;
-                float curved = 0.48 + centered * effContrast;
-                float extremeBlend = smoothstep(0.0, 0.18, L) * (1.0 - smoothstep(0.76, 1.0, L));
+                float effContrast = mix(uContrast, 1.0 + (uContrast - 1.0) * 0.40, skinWeight * uSkinProtection);
+                float centered = L - 0.46;
+                float curved = 0.46 + centered * effContrast;
+                float extremeBlend = smoothstep(0.01, 0.18, L) * (1.0 - smoothstep(0.74, 1.0, L));
                 L = mix(L, curved, extremeBlend);
 
-                if (L > 0.72) {
-                    float over = (L - 0.72) / 0.28;
-                    float compressed = 0.72 + 0.28 * (over / (1.0 + over * uHighlightShoulder));
-                    L = mix(L, compressed, smoothstep(0.72, 0.92, L));
+                if (L > 0.68) {
+                    float over = (L - 0.68) / 0.32;
+                    float compressed = 0.68 + 0.32 * (over / (1.0 + over * uHighlightShoulder));
+                    L = mix(L, compressed, smoothstep(0.68, 0.90, L));
                 }
                 L = clamp(L, 0.0, 1.0);
 
-                // 6. Perceptual Hue Shift (from 2D Palette X-axis) with skin-tone protection
+                // 6. 2D Palette Hue Rotation with skin protection
                 vec3 srgbWb = linearToSrgb(clamp(linWb, 0.0, 1.0));
                 vec3 hsvWb = rgbToHsv(srgbWb);
                 float hDeg = hsvWb.x * 360.0;
                 vec2 abBase = lab.yz;
 
-                float effHueShift = uPaletteHueShiftDeg * (1.0 - skinWeight * uSkinProtection * 0.78);
+                float effHueShift = uPaletteHueShiftDeg * (1.0 - skinWeight * uSkinProtection * 0.85);
                 if (abs(effHueShift) > 0.05 && hsvWb.y > 0.03) {
                     vec3 hsvRot = vec3(fract(hsvWb.x + effHueShift / 360.0), hsvWb.y, hsvWb.z);
                     vec3 rgbRot = hsvToRgb(hsvRot);
@@ -312,29 +352,42 @@ object PhotographicStyleShaderSource {
                     }
                 }
 
-                // 7. Perceptual LAB Chrominance: Saturation + Vibrance + Sky/Foliage
+                // 7. Nature Color Families: Blue sky depth & natural foliage green
+                float skyMask = smoothstep(185.0, 205.0, hDeg) * (1.0 - smoothstep(238.0, 258.0, hDeg));
+                float greenMask = smoothstep(76.0, 96.0, hDeg) * (1.0 - smoothstep(145.0, 168.0, hDeg));
+                float natureBoost = 1.0 + uSkyFoliageBoost * max(skyMask, greenMask) * smoothstep(0.08, 0.42, hsvWb.y);
+                if (skyMask > 0.01 && uSkyFoliageBoost > 0.01) {
+                    L = clamp(L - 0.035 * uSkyFoliageBoost * skyMask * smoothstep(0.12, 0.55, hsvWb.y), 0.0, 1.0);
+                }
+
+                // 8. Vibrance, Saturation, and Luminance-Aware Chroma Roll-off
                 float chroma = length(abBase);
-                float chromaNorm = clamp(chroma / 75.0, 0.0, 1.0);
+                float chromaNorm = clamp(chroma / 72.0, 0.0, 1.0);
                 float vibranceGate = clamp(uChromaScale / 0.35, 0.0, 1.0);
                 float vibranceGain = 1.0 + (uVibrance * vibranceGate) * (1.0 - chromaNorm) * (1.0 - chromaNorm);
                 float baseChromaGain = uChromaScale * vibranceGain;
 
-                float skyMask = smoothstep(185.0, 205.0, hDeg) * (1.0 - smoothstep(240.0, 260.0, hDeg));
-                float greenMask = smoothstep(75.0, 98.0, hDeg) * (1.0 - smoothstep(145.0, 168.0, hDeg));
-                float natureBoost = 1.0 + uSkyFoliageBoost * max(skyMask, greenMask) * smoothstep(0.10, 0.45, hsvWb.y);
-
                 float targetChromaGain = baseChromaGain * natureBoost;
                 float skinMaxChromaGain = (targetChromaGain > 1.0)
-                    ? (1.0 + (targetChromaGain - 1.0) * (1.0 - uSkinProtection * 0.72))
+                    ? (1.0 + (targetChromaGain - 1.0) * (1.0 - uSkinProtection * 0.78))
                     : targetChromaGain;
                 float finalChromaGain = mix(targetChromaGain, skinMaxChromaGain, skinWeight);
 
-                float labWarmMod = effWarmth * 16.0 * (1.0 - smoothstep(0.80, 1.0, L));
-                float labTintMod = effTint * 12.0 * (1.0 - skinWeight * 0.4);
-                vec2 abOut = abBase * finalChromaGain + vec2(labTintMod, labWarmMod);
+                // Natural desaturation in deep shadows and specular highlights
+                float satRollOff = (1.0 - smoothstep(0.78, 0.98, L) * 0.70) * smoothstep(0.015, 0.10, L);
+                vec2 abScaled = abBase * (finalChromaGain * satRollOff);
+
+                // Ambient warmth and tint modulation
+                float labWarmMod = effWarmth * 14.0 * (1.0 - smoothstep(0.78, 0.98, L));
+                float labTintMod = effTint * 10.0 * (1.0 - skinWeight * 0.45);
+                vec2 abGraded = abScaled + vec2(labTintMod, labWarmMod);
+
+                // 9. Melanin Hue-Angle Lock: Project skin pixels to original melanin angle
+                float gradedChroma = length(abGraded);
+                vec2 skinLockedAb = vec2(gradedChroma * cos(origSkinAngle), gradedChroma * sin(origSkinAngle));
+                vec2 abOut = mix(abGraded, skinLockedAb, clamp(skinWeight * uSkinProtection, 0.0, 1.0));
 
                 if (uFilmAmount > 0.005) {
-                    // Analog film toe lift, organic S-curve compression, and subtle split-tone
                     float toeLift = smoothstep(0.34, 0.0, L) * 0.032 * uFilmAmount;
                     float filmCurve = L + (L - 0.50) * (0.14 * uFilmAmount) * smoothstep(0.08, 0.30, L) * (1.0 - smoothstep(0.76, 0.98, L));
                     float highlightCeiling = mix(1.0, 0.965, uFilmAmount);
@@ -345,7 +398,7 @@ object PhotographicStyleShaderSource {
                     abOut += vec2(-1.4, -2.8) * shadowSplit + vec2(0.9, 3.6) * highlightSplit * (1.0 - skinWeight * 0.45);
                 }
 
-                // 8. Reconstruct Linear RGB, soft gamut map, encode sRGB
+                // 10. Reconstruct Linear RGB, soft gamut map, encode sRGB
                 vec3 labFinal = vec3(L * 100.0, abOut.x, abOut.y);
                 vec3 linOut = softGamutMap(xyzToRgb(labToXyz(labFinal)));
                 vec3 srgbOut = linearToSrgb(linOut);

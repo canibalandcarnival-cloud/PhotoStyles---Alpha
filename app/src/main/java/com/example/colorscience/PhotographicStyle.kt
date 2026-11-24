@@ -42,15 +42,15 @@ enum class PhotographicStyle(
         defaultPadY = 0.50f,
         profile = StyleColorProfile(
             shadowCurve = 0.0f,
-            midtoneContrast = 1.03f,
-            highlightShoulder = 0.14f,
+            midtoneContrast = 1.02f,
+            highlightShoulder = 0.16f,
             vibrance = 0.04f,
             chromaScale = 1.00f,
             warmthBias = 0.0f,
             tintBias = 0.0f,
-            skinProtection = 0.85f,
+            skinProtection = 0.88f,
             coolSkinGuard = 0.0f,
-            skyFoliageBoost = 0.0f
+            skyFoliageBoost = 0.04f
         )
     ),
     RICH_CONTRAST(
@@ -63,16 +63,16 @@ enum class PhotographicStyle(
         defaultPadX = 0.54f,
         defaultPadY = 0.72f,
         profile = StyleColorProfile(
-            shadowCurve = -0.14f,
+            shadowCurve = -0.16f,
             midtoneContrast = 1.18f,
-            highlightShoulder = 0.24f,
-            vibrance = 0.10f,
+            highlightShoulder = 0.26f,
+            vibrance = 0.12f,
             chromaScale = 1.08f,
             warmthBias = 0.02f,
             tintBias = 0.0f,
-            skinProtection = 0.82f,
+            skinProtection = 0.84f,
             coolSkinGuard = 0.0f,
-            skyFoliageBoost = 0.10f
+            skyFoliageBoost = 0.14f
         )
     ),
     VIBRANT(
@@ -85,16 +85,16 @@ enum class PhotographicStyle(
         defaultPadX = 0.64f,
         defaultPadY = 0.30f,
         profile = StyleColorProfile(
-            shadowCurve = 0.10f,
+            shadowCurve = 0.09f,
             midtoneContrast = 1.05f,
-            highlightShoulder = 0.20f,
-            vibrance = 0.30f,
-            chromaScale = 1.13f,
+            highlightShoulder = 0.22f,
+            vibrance = 0.32f,
+            chromaScale = 1.14f,
             warmthBias = 0.03f,
             tintBias = 0.01f,
-            skinProtection = 0.90f,
+            skinProtection = 0.92f,
             coolSkinGuard = 0.0f,
-            skyFoliageBoost = 0.18f
+            skyFoliageBoost = 0.20f
         )
     ),
     WARM(
@@ -108,15 +108,15 @@ enum class PhotographicStyle(
         defaultPadY = 0.46f,
         profile = StyleColorProfile(
             shadowCurve = 0.02f,
-            midtoneContrast = 1.04f,
-            highlightShoulder = 0.16f,
+            midtoneContrast = 1.03f,
+            highlightShoulder = 0.18f,
             vibrance = 0.08f,
-            chromaScale = 1.03f,
-            warmthBias = 0.18f,
+            chromaScale = 1.04f,
+            warmthBias = 0.20f,
             tintBias = 0.03f,
-            skinProtection = 0.78f,
+            skinProtection = 0.82f,
             coolSkinGuard = 0.0f,
-            skyFoliageBoost = 0.02f
+            skyFoliageBoost = 0.05f
         )
     ),
     COOL(
@@ -130,15 +130,15 @@ enum class PhotographicStyle(
         defaultPadY = 0.48f,
         profile = StyleColorProfile(
             shadowCurve = 0.01f,
-            midtoneContrast = 1.05f,
-            highlightShoulder = 0.18f,
+            midtoneContrast = 1.04f,
+            highlightShoulder = 0.20f,
             vibrance = 0.09f,
-            chromaScale = 1.02f,
-            warmthBias = -0.18f,
+            chromaScale = 1.03f,
+            warmthBias = -0.20f,
             tintBias = -0.02f,
-            skinProtection = 0.92f,
-            coolSkinGuard = 0.72f,
-            skyFoliageBoost = 0.08f
+            skinProtection = 0.94f,
+            coolSkinGuard = 0.78f,
+            skyFoliageBoost = 0.10f
         )
     );
 
@@ -202,18 +202,18 @@ data class StyleParameters(
         val palToneNorm = (pal.tone - 50) / 50f     // -1..+1
         val palWarmthNorm = pal.warmth / 100f       // -1..+1
 
-        val shadowLift = (p.shadowCurve + toneDelta * 0.24f + palToneNorm * 0.22f).coerceIn(-0.55f, 0.55f)
+        val shadowLift = (p.shadowCurve + toneDelta * 0.26f + palToneNorm * 0.22f).coerceIn(-0.55f, 0.55f)
         val midtoneLift = (
-            toneDelta * 0.09f +
+            toneDelta * 0.10f +
                 palToneNorm * 0.16f +
                 if (style == PhotographicStyle.VIBRANT) 0.035f else 0f
-            ).coerceIn(-0.34f, 0.34f)
-        val contrast = (p.midtoneContrast - toneDelta * 0.16f - palToneNorm * 0.14f).coerceIn(0.72f, 1.50f)
+            ).coerceIn(-0.35f, 0.35f)
+        val contrast = (p.midtoneContrast - toneDelta * 0.16f - palToneNorm * 0.14f).coerceIn(0.70f, 1.55f)
         val highlightProtection = (p.highlightShoulder + abs(toneDelta) * 0.08f + abs(palToneNorm) * 0.06f)
             .coerceIn(0.10f, 0.40f)
 
-        val warmthShift = (p.warmthBias + warmthDelta * 0.34f + palWarmthNorm * 0.42f).coerceIn(-0.75f, 0.75f)
-        val tintShift = (p.tintBias + warmthDelta * 0.05f + palHueNorm * 0.08f).coerceIn(-0.24f, 0.24f)
+        val warmthShift = (p.warmthBias + warmthDelta * 0.36f + palWarmthNorm * 0.42f).coerceIn(-0.75f, 0.75f)
+        val tintShift = (p.tintBias + warmthDelta * 0.05f + palHueNorm * 0.08f).coerceIn(-0.25f, 0.25f)
 
         // Asymmetric saturation factor: 0 -> 0.0x (monochrome), 50 -> 1.0x, 100 -> 1.65x
         val satFactor = if (palSatNorm < 0f) (1f + palSatNorm) else (1f + palSatNorm * 0.65f)
