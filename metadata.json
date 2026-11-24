@@ -1,0 +1,6 @@
+{
+  "name": "PhotoStyles",
+  "description": "Authentic iPhone-inspired Camera Photographic Styles app with real-time LAB/HSV/RGB color science, Tone and Warmth controls, live GPU camera preview, full-resolution capture, and scene validation lab.",
+  "requestFramePermissions": ["CAMERA"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

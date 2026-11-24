@@ -1,0 +1,105 @@
+<resources>
+    <string name="app_name">PhotoStyles</string>
+
+    <!-- Photographic Styles -->
+    <string name="style_standard">Standard</string>
+    <string name="style_rich_contrast">Rich Contrast</string>
+    <string name="style_vibrant">Vibrant</string>
+    <string name="style_warm">Warm</string>
+    <string name="style_cool">Cool</string>
+
+    <string name="style_desc_standard">Natural, balanced color with true-to-life skin tones</string>
+    <string name="style_desc_rich_contrast">Deeper shadows, richer contrast, and expressive color depth</string>
+    <string name="style_desc_vibrant">Brighter, lively colors while preserving natural skin tones</string>
+    <string name="style_desc_warm">Golden undertones with luminous warm white balance</string>
+    <string name="style_desc_cool">Crisp cool undertones while protecting warm skin tones</string>
+
+    <!-- Controls & Labels -->
+    <string name="label_tone">TONE</string>
+    <string name="label_warmth">WARMTH</string>
+    <string name="label_reset">Reset</string>
+    <string name="label_modified">Custom</string>
+    <string name="label_original">Original</string>
+    <string name="label_styled">Styled</string>
+    <string name="label_hold_compare">Hold to Compare</string>
+    <string name="label_save_photo">Save Photo</string>
+    <string name="label_saving">Saving…</string>
+    <string name="label_retake">Retake</string>
+    <string name="label_saved_toast">Saved to Photos</string>
+    <string name="label_save_failed">Could not save photo</string>
+    <string name="label_calibration_lab">Style Lab</string>
+    <string name="label_import_photo">Import Photo</string>
+    <string name="label_compare_all">Compare All 5</string>
+    <string name="label_single_inspect">Inspector</string>
+
+    <!-- Palette Feature -->
+    <string name="label_palette">Palette</string>
+    <string name="label_hue">HUE</string>
+    <string name="label_saturation">SATURATION</string>
+    <string name="label_undertones">UNDERTONES</string>
+    <string name="label_reset_palette">Reset Palette</string>
+    <string name="label_palette_presets_title">Palette Presets</string>
+    <string name="label_save_custom_palette">Save Palette</string>
+    <string name="label_palette_saved">Palette saved</string>
+    <string name="hint_preset_name">Name this palette…</string>
+    <string name="label_done">Done</string>
+
+    <!-- Camera & Permissions -->
+    <string name="permission_camera_title">Camera Access Required</string>
+    <string name="permission_camera_body">PhotoStyles needs camera access to render live Photographic Styles in real time and capture full-resolution photos.</string>
+    <string name="permission_camera_grant">Enable Camera</string>
+    <string name="permission_camera_settings">Open Settings</string>
+    <string name="permission_camera_open_lab">Explore Style Lab</string>
+
+    <!-- iOS 27 Camera Controls & Modes -->
+    <string name="mode_video">VIDEO</string>
+    <string name="mode_photo">PHOTO</string>
+    <string name="ctrl_flash">FLASH</string>
+    <string name="ctrl_timer">TIMER</string>
+    <string name="ctrl_exposure">EXPOSURE</string>
+    <string name="ctrl_styles">STYLES</string>
+    <string name="ctrl_palette">PALETTE</string>
+    <string name="ctrl_aspect">ASPECT</string>
+    <string name="ctrl_night_mode">NIGHT MODE</string>
+    <string name="ctrl_grid">GRID</string>
+    <string name="ctrl_level">LEVEL</string>
+    <string name="ctrl_resolution">RESOLUTION</string>
+    <string name="ctrl_format">FORMAT</string>
+    <string name="ctrl_style_lab">STYLE LAB</string>
+    <string name="label_video_saved">Saved video to Photos</string>
+    <string name="label_video_failed">Could not save video</string>
+    <string name="label_ev">EV</string>
+
+    <!-- Circular Styles & Texture Controls -->
+    <string name="label_styles_title">STYLES</string>
+    <string name="tab_palette">PALETTE</string>
+    <string name="tab_texture">TEXTURE</string>
+    <string name="texture_standard">STANDARD</string>
+    <string name="texture_soft_skin">SOFT\nSKIN</string>
+    <string name="texture_glow">GLOW</string>
+    <string name="texture_film">FILM</string>
+    <string name="texture_grain">GRAIN</string>
+    <string name="label_2d_palette">2D PALETTE</string>
+
+    <!-- Content Descriptions -->
+    <string name="cd_shutter">Capture photo</string>
+    <string name="cd_record_video">Record video</string>
+    <string name="cd_stop_video">Stop recording</string>
+    <string name="cd_switch_camera">Switch front and rear camera</string>
+    <string name="cd_toggle_styles">Toggle Photographic Styles panel</string>
+    <string name="cd_toggle_flash">Toggle camera flash mode</string>
+    <string name="cd_toggle_night">Toggle Night Mode</string>
+    <string name="cd_toggle_timer">Cycle self-timer</string>
+    <string name="cd_toggle_exposure">Adjust exposure</string>
+    <string name="cd_toggle_grid">Toggle rule of thirds grid</string>
+    <string name="cd_toggle_level">Toggle horizon level</string>
+    <string name="cd_open_controls">Open camera controls drawer</string>
+    <string name="cd_close_controls">Close camera controls drawer</string>
+    <string name="cd_open_lab">Open Style Calibration Lab</string>
+    <string name="cd_open_palette">Open Photographic Styles Palette</string>
+    <string name="cd_close_palette">Close Photographic Styles Palette</string>
+    <string name="cd_palette_presets">Open saved palette presets</string>
+    <string name="cd_last_photo">View last captured photo</string>
+    <string name="cd_back">Navigate back</string>
+    <string name="cd_aspect_ratio">Change viewfinder aspect ratio</string>
+</resources>
